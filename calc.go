@@ -15156,7 +15156,19 @@ func (fn *formulaFuncs) MATCH(argsList *list.List) formulaArg {
 	default:
 		return newErrorFormulaArg(formulaErrorNA, lookupArrayErr)
 	}
-	return calcMatch(matchType, formulaCriteriaParser(argsList.Front().Value.(formulaArg)), lookupArray)
+
+	// When dealing with string values that do not match any of the regex patterns defined in formulaFormats,
+	// the criteria type will default to 'criteriaRegexp'.
+	// In cases of exact matches, this causes the formulaCriteriaEval to match substrings within the lookupArray,
+	// which conflicts with the intended behavior of exact matching.
+	// To address this issue, the condition value is modified by appending '^' at the beginning and '$' at the end,
+	// ensuring that the regex matches the exact string, rather than partial matches.
+	criteria := formulaCriteriaParser(argsList.Front().Value.(formulaArg))
+	if matchType == matchModeExact && criteria.Type == criteriaRegexp && criteria.Condition.Type == ArgString {
+		criteria.Condition = newStringFormulaArg("^" + criteria.Condition.Value() + "$")
+	}
+
+	return calcMatch(matchType, criteria, lookupArray)
 }
 
 // TRANSPOSE function 'transposes' an array of cells (i.e. the function copies
