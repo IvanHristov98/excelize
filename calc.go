@@ -14540,9 +14540,9 @@ func (fn *formulaFuncs) UNICODE(argsList *list.List) formulaArg {
 // For syntax refer to
 // https://support.microsoft.com/en-us/office/unique-function-c5ab87fd-30a3-4ce9-9d1a-40204fb85e1e.
 func (fn *formulaFuncs) UNIQUE(argsList *list.List) formulaArg {
-	args := getFormulaUniqueArgs(argsList)
-	if args.errArg != nil {
-		return *args.errArg
+	args, errArg := getFormulaUniqueArgs(argsList)
+	if errArg != nil {
+		return *errArg
 	}
 
 	if args.byColumn {
@@ -14561,18 +14561,14 @@ func (fn *formulaFuncs) UNIQUE(argsList *list.List) formulaArg {
 	}
 
 	uniqueAxes := [][]formulaArg{}
-	added := map[string]struct{}{}
 
 	for i := 0; i < len(args.cellRange); i += args.cols {
 		key := concatValues(args.cellRange[i : i+args.cols])
-		if _, ok := added[key]; ok {
-			continue
-		}
-		added[key] = struct{}{}
 
 		if (args.exactlyOnce && counts[key] == 1) || (!args.exactlyOnce && counts[key] >= 1) {
 			uniqueAxes = append(uniqueAxes, args.cellRange[i:i+args.cols])
 		}
+		delete(counts, key)
 	}
 
 	if args.byColumn {
@@ -14622,70 +14618,67 @@ func concatValues(args []formulaArg) string {
 	return val
 }
 
-type formulaUniqueArgs struct {
+type uniqueArgs struct {
 	cellRange   []formulaArg
 	cols        int
 	rows        int
 	byColumn    bool
 	exactlyOnce bool
-	errArg      *formulaArg
 }
 
-func getFormulaUniqueArgs(argsList *list.List) formulaUniqueArgs {
+func getFormulaUniqueArgs(argsList *list.List) (uniqueArgs, *formulaArg) {
+	res := uniqueArgs{}
+
 	argsLen := argsList.Len()
 	if argsLen == 0 {
 		errArg := newErrorFormulaArg(formulaErrorVALUE, "UNIQUE requires at least 1 argument")
-		return formulaUniqueArgs{errArg: &errArg}
+		return res, &errArg
 	}
 
-	argRange := argsList.Front().Value.(formulaArg).ToList()
-	if argRange == nil || argsLen > 3 {
+	if argsLen > 3 {
 		msg := fmt.Sprintf("UNIQUE takes at most 3 arguments, received %d arguments", argsLen)
 		errArg := newErrorFormulaArg(formulaErrorVALUE, msg)
 
-		return formulaUniqueArgs{errArg: &errArg}
+		return res, &errArg
+	}
+
+	firstArg := argsList.Front()
+	res.cellRange = firstArg.Value.(formulaArg).ToList()
+	if len(res.cellRange) == 0 {
+		errArg := newErrorFormulaArg(formulaErrorVALUE, "missing first argument to UNIQUE")
+		return res, &errArg
+	}
+	if res.cellRange[0].Type == ArgError {
+		return res, &res.cellRange[0]
 	}
 
 	rmin, rmax := calcColsRowsMinMax(false, argsList)
 	cmin, cmax := calcColsRowsMinMax(true, argsList)
-	cols, rows := cmax-cmin+1, rmax-rmin+1
+	res.cols, res.rows = cmax-cmin+1, rmax-rmin+1
 
-	sndArg := argsList.Front().Next()
-	if sndArg == nil {
-		return formulaUniqueArgs{
-			cellRange: argRange,
-			cols:      cols,
-			rows:      rows,
-		}
+	secondArg := firstArg.Next()
+	if secondArg == nil {
+		return res, nil
 	}
 
-	argByColumn := sndArg.Value.(formulaArg).ToBool()
+	argByColumn := secondArg.Value.(formulaArg).ToBool()
 	if argByColumn.Type == ArgError {
-		return formulaUniqueArgs{errArg: &argByColumn}
+		return res, &argByColumn
+	}
+	res.byColumn = (argByColumn.Value() == "TRUE")
+
+	thirdArg := secondArg.Next()
+	if thirdArg == nil {
+		return res, nil
 	}
 
-	trdArg := argsList.Front().Next().Next()
-	if trdArg == nil {
-		return formulaUniqueArgs{
-			cellRange: argRange,
-			cols:      cols,
-			rows:      rows,
-			byColumn:  argByColumn.Value() == "TRUE",
-		}
-	}
-
-	argExactlyOnce := trdArg.Value.(formulaArg).ToBool()
+	argExactlyOnce := thirdArg.Value.(formulaArg).ToBool()
 	if argExactlyOnce.Type == ArgError {
-		return formulaUniqueArgs{errArg: &argExactlyOnce}
+		return res, &argExactlyOnce
 	}
+	res.exactlyOnce = (argExactlyOnce.Value() == "TRUE")
 
-	return formulaUniqueArgs{
-		cellRange:   argRange,
-		cols:        cols,
-		rows:        rows,
-		byColumn:    argByColumn.Value() == "TRUE",
-		exactlyOnce: argExactlyOnce.Value() == "TRUE",
-	}
+	return res, nil
 }
 
 // UPPER converts all characters in a supplied text string to upper case. The
